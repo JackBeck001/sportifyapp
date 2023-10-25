@@ -1,0 +1,68 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:storify/constants/values.dart' as Constants;
+import 'package:storify/models/playlist.dart';
+import 'package:storify/services/algolia_service.dart';
+import 'package:storify/services/api_path.dart';
+import 'package:storify/services/firestore_service.dart';
+
+class FirebaseDB {
+  final _service = FirestoreService.instance;
+  final _angoliaService = AlgoliaService();
+
+  Future<void> setStory(
+      String storyText, Playlist playlist, String? trackId) async {
+    await _service.setData(
+        path: APIPath.story(playlist.id, trackId), data: {'text': storyText});
+    await _service.setData(
+      path: APIPath.playlist(playlist.id),
+      data: {...playlist.toJson(), 'timestamp': FieldValue.serverTimestamp()},
+    );
+    await _angoliaService.updateIndexWithPlaylist(playlist.toJson());
+  }
+
+  Future<String?> storyText(
+      {required String playlistId, required String trackId}) async {
+    final data = await _service.documentData(
+        path: APIPath.story(playlistId, trackId),
+        builder: (data) => data != null ? (data['text'] as String?) : '');
+    return data;
+  }
+
+  Stream<List<Playlist>> playlistsStream() => _service.collectionStream(
+        path: APIPath.playlists,
+        builder: (data, documentID) => Playlist.fromFirebaseSnapshot(data),
+        queryBuilder: (query) => query
+            .orderBy('timestamp', descending: true)
+            .where('is_public', isEqualTo: true)
+            .limit(Constants.recentlyUpdatedPlaylistsLimit),
+      );
+
+  Stream<bool> isPlaylistSavedStream(
+          {required String? userId, required String? playlistId}) =>
+      _service.documentStream(
+        path: APIPath.savedPlaylist(userId: userId, playlistId: playlistId),
+        builder: (data, _) => data != null,
+      );
+
+  Stream<List<Playlist>> savedPlaylistsStream({required String? userId}) =>
+      _service.collectionStream(
+        path: APIPath.savedPlaylists(userId: userId),
+        builder: (data, documentID) => Playlist.fromFirebaseSnapshot(data),
+      );
+
+  Future<void> savePlaylist(
+      {required String? userId, required Playlist playlist}) async {
+    await _service.setData(
+        path: APIPath.savedPlaylist(userId: userId, playlistId: playlist.id),
+        data: {
+          ...playlist.toJson(),
+          'timestamp': FieldValue.serverTimestamp()
+        });
+  }
+
+  Future<void> unsavePlaylist(
+      {required String? userId, required String? playlistId}) async {
+    await _service.deleteData(
+        path: APIPath.savedPlaylist(userId: userId, playlistId: playlistId));
+  }
+}
